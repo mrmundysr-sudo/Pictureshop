@@ -5,7 +5,6 @@ import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
-import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.Gravity;
@@ -21,6 +20,7 @@ import java.io.OutputStream;
 public class MainActivity extends Activity {
     private static final int PICK_IMAGE = 11;
     private static final int CREATE_PNG = 12;
+    private static final int CREATE_PSD = 13;
     private EditorView editor;
     private TextView hint;
 
@@ -53,22 +53,29 @@ public class MainActivity extends Activity {
         root.addView(editor, new LinearLayout.LayoutParams(-1, 0, 1));
 
         hint = new TextView(this);
-        hint.setText("Open an image to begin. Your original stays full resolution.");
+        hint.setText("Open an image to begin. Trace a cutout by tapping points or dragging.");
         hint.setTextColor(Color.rgb(225, 228, 235));
         hint.setTextSize(13);
         hint.setGravity(Gravity.CENTER_VERTICAL);
         hint.setPadding(dp(14), 0, dp(14), 0);
-        root.addView(hint, new LinearLayout.LayoutParams(-1, dp(38)));
+        root.addView(hint, new LinearLayout.LayoutParams(-1, dp(42)));
 
         addTool(tools, "Open", v -> openImage());
         addTool(tools, "−", v -> editor.zoomBy(0.8f));
         addTool(tools, "+", v -> editor.zoomBy(1.25f));
         addTool(tools, "Pan", v -> { editor.setMode(EditorView.Mode.PAN); updateHint("Pan mode: drag the image. Use + / − to zoom."); });
-        addTool(tools, "Lasso", v -> { editor.setMode(EditorView.Mode.LASSO); updateHint("Lasso mode: tap around the object, then tap Finish."); });
-        addTool(tools, "Undo pt", v -> editor.undoPoint());
-        addTool(tools, "Finish", v -> { editor.finishLasso(); updateHint("Outline closed. Tap Cut Layer to create a transparent cutout."); });
-        addTool(tools, "Cut Layer", v -> { if (editor.cutSelection()) updateHint("Cutout added as a movable layer. Choose Move Layer to reposition it."); });
-        addTool(tools, "Move Layer", v -> { editor.setMode(EditorView.Mode.MOVE); updateHint("Move Layer mode: drag the cutout."); });
+        addTool(tools, "Lasso", v -> { editor.setMode(EditorView.Mode.LASSO); updateHint("Lasso: tap around the object or trace it with your finger."); });
+        addTool(tools, "Undo pt", v -> { editor.undoPoint(); updateHint("Removed the last lasso point."); });
+        addTool(tools, "Finish", v -> {
+            if (editor.finishLasso()) updateHint("Lasso closed. Tap Cut Layer to make a transparent layer.");
+            else updateHint("Add at least 3 points around the object, then tap Finish.");
+        });
+        addTool(tools, "Cut Layer", v -> {
+            if (editor.cutSelection()) updateHint("Cutout is now a transparent layer. Choose Move Layer to reposition it.");
+            else updateHint("Finish a lasso with at least 3 points before cutting.");
+        });
+        addTool(tools, "Move Layer", v -> { editor.setMode(EditorView.Mode.MOVE); updateHint("Move Layer: drag the newest cutout layer."); });
+        addTool(tools, "Export PSD", v -> createPsd());
         addTool(tools, "Export PNG", v -> createPng());
 
         setContentView(root);
@@ -103,7 +110,7 @@ public class MainActivity extends Activity {
                 Bitmap image = BitmapFactory.decodeStream(in, null, opts);
                 if (image == null) throw new IllegalArgumentException("Unsupported image");
                 editor.setImage(image);
-                updateHint("Image loaded at original resolution. Pinch or use + / −, then trace a cutout.");
+                updateHint("Image loaded at original resolution. Zoom in, choose Lasso, then tap points or trace.");
             } catch (Exception e) { toast("Could not open image: " + e.getMessage()); }
         } else if (requestCode == CREATE_PNG) {
             try (OutputStream out = getContentResolver().openOutputStream(uri)) {
@@ -111,6 +118,12 @@ public class MainActivity extends Activity {
                 editor.exportComposite().compress(Bitmap.CompressFormat.PNG, 100, out);
                 toast("PNG exported.");
             } catch (Exception e) { toast("Export failed: " + e.getMessage()); }
+        } else if (requestCode == CREATE_PSD) {
+            try (OutputStream out = getContentResolver().openOutputStream(uri)) {
+                if (out == null) throw new IllegalStateException("Could not create file");
+                editor.writePsd(out);
+                toast("Layered PSD exported. Open it in Photoshop to check your layers.");
+            } catch (Exception e) { toast("PSD export failed: " + e.getMessage()); }
         }
     }
 
@@ -122,6 +135,16 @@ public class MainActivity extends Activity {
         i.putExtra(Intent.EXTRA_TITLE, "pictureshop-export.png");
         startActivityForResult(i, CREATE_PNG);
     }
+
+    private void createPsd() {
+        if (!editor.hasImage()) { toast("Open an image first."); return; }
+        Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("image/vnd.adobe.photoshop");
+        i.putExtra(Intent.EXTRA_TITLE, "pictureshop-project.psd");
+        startActivityForResult(i, CREATE_PSD);
+    }
+
     private void updateHint(String text) { hint.setText(text); }
     private void toast(String text) { Toast.makeText(this, text, Toast.LENGTH_LONG).show(); }
     private int dp(float v) { return (int)(v * getResources().getDisplayMetrics().density + 0.5f); }
