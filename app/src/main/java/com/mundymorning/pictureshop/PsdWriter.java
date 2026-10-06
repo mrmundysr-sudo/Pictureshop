@@ -30,7 +30,7 @@ final class PsdWriter {
         for(Layer layer:layers) {
             int nameBytes=nameBytes(layer.name);
             int nameField=round4(1+nameBytes);
-            long channels=4L*(6L+2L+(long)layer.bitmap.getWidth()*layer.bitmap.getHeight());
+            long channels=4L*(2L+(long)layer.bitmap.getWidth()*layer.bitmap.getHeight());
             layerInfoLength += 66L+nameField+channels;
         }
         if((layerInfoLength&1L)!=0) layerInfoLength++;
