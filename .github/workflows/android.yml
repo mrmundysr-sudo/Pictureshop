@@ -20,6 +20,11 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
+      - name: Reuse debug signing key across APK builds
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: pictureshop-debug-signing-v1
       - name: Install Android platform
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
       - name: Build debug APK
