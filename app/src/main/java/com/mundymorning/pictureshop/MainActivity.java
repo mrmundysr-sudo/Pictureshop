@@ -10,7 +10,6 @@ import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
-import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -41,55 +40,90 @@ public class MainActivity extends Activity {
         title.setTypeface(null, 1);
         root.addView(title, new LinearLayout.LayoutParams(-1, dp(42)));
 
-        HorizontalScrollView strip = new HorizontalScrollView(this);
-        strip.setHorizontalScrollBarEnabled(false);
-        LinearLayout tools = new LinearLayout(this);
-        tools.setGravity(Gravity.CENTER_VERTICAL);
-        tools.setPadding(dp(7), dp(4), dp(7), dp(4));
-        strip.addView(tools);
-        root.addView(strip, new LinearLayout.LayoutParams(-1, dp(54)));
+        LinearLayout basic = addRow(root);
+        addTool(basic, "Open", v -> openImage());
+        addTool(basic, "Zoom −", v -> editor.zoomBy(0.8f));
+        addTool(basic, "Zoom +", v -> editor.zoomBy(1.25f));
+        addTool(basic, "Pan", v -> {
+            editor.setMode(EditorView.Mode.PAN);
+            updateHint("Pan mode: drag the image. Zoom with the buttons or two fingers.");
+        });
+
+        LinearLayout trace = addRow(root);
+        addTool(trace, "Lasso", v -> {
+            editor.setMode(EditorView.Mode.LASSO);
+            updateHint("Step 1: trace the edge with taps or a finger drag.");
+        });
+        addTool(trace, "Undo Point", v -> {
+            if (editor.getLassoPointCount() > 0) {
+                editor.undoPoint();
+                updateHint("Last lasso point removed.");
+            } else updateHint("There are no lasso points to undo.");
+        });
+        addTool(trace, "Finish Lasso", v -> {
+            if (editor.finishLasso()) updateHint("Step 2: outline closed. Tap Cut Layer.");
+            else updateHint("Add at least 3 points around the object, then tap Finish Lasso.");
+        });
+        addTool(trace, "Cut Layer", v -> cutLayer());
+
+        LinearLayout export = addRow(root);
+        addTool(export, "Move Layer", v -> {
+            if (editor.hasCutouts()) {
+                editor.setMode(EditorView.Mode.MOVE);
+                updateHint("Move mode: drag the cutout on the canvas.");
+            } else updateHint("No cutout layer yet. Finish the lasso, then tap Cut Layer.");
+        });
+        addTool(export, "Export PSD", v -> createPsd());
+        addTool(export, "Export PNG", v -> createPng());
 
         editor = new EditorView(this);
         root.addView(editor, new LinearLayout.LayoutParams(-1, 0, 1));
 
         hint = new TextView(this);
-        hint.setText("Open an image to begin. Trace a cutout by tapping points or dragging.");
-        hint.setTextColor(Color.rgb(225, 228, 235));
-        hint.setTextSize(13);
+        hint.setText("Open image → Lasso → Finish Lasso → Cut Layer → Export PSD");
+        hint.setTextColor(Color.rgb(245, 235, 190));
+        hint.setTextSize(12);
         hint.setGravity(Gravity.CENTER_VERTICAL);
-        hint.setPadding(dp(14), 0, dp(14), 0);
-        root.addView(hint, new LinearLayout.LayoutParams(-1, dp(42)));
-
-        addTool(tools, "Open", v -> openImage());
-        addTool(tools, "−", v -> editor.zoomBy(0.8f));
-        addTool(tools, "+", v -> editor.zoomBy(1.25f));
-        addTool(tools, "Pan", v -> { editor.setMode(EditorView.Mode.PAN); updateHint("Pan mode: drag the image. Use + / − to zoom."); });
-        addTool(tools, "Lasso", v -> { editor.setMode(EditorView.Mode.LASSO); updateHint("Lasso: tap around the object or trace it with your finger."); });
-        addTool(tools, "Undo pt", v -> { editor.undoPoint(); updateHint("Removed the last lasso point."); });
-        addTool(tools, "Finish", v -> {
-            if (editor.finishLasso()) updateHint("Lasso closed. Tap Cut Layer to make a transparent layer.");
-            else updateHint("Add at least 3 points around the object, then tap Finish.");
-        });
-        addTool(tools, "Cut Layer", v -> {
-            if (editor.cutSelection()) updateHint("Cutout is now a transparent layer. Choose Move Layer to reposition it.");
-            else updateHint("Finish a lasso with at least 3 points before cutting.");
-        });
-        addTool(tools, "Move Layer", v -> { editor.setMode(EditorView.Mode.MOVE); updateHint("Move Layer: drag the newest cutout layer."); });
-        addTool(tools, "Export PSD", v -> createPsd());
-        addTool(tools, "Export PNG", v -> createPng());
+        hint.setPadding(dp(12), dp(4), dp(12), dp(4));
+        root.addView(hint, new LinearLayout.LayoutParams(-1, dp(48)));
 
         setContentView(root);
+    }
+
+    private LinearLayout addRow(LinearLayout root) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(3), dp(2), dp(3), dp(2));
+        root.addView(row, new LinearLayout.LayoutParams(-1, dp(48)));
+        return row;
     }
 
     private void addTool(LinearLayout row, String label, View.OnClickListener action) {
         Button b = new Button(this);
         b.setText(label);
-        b.setTextSize(12);
+        b.setTextSize(11);
         b.setAllCaps(false);
-        b.setMinWidth(dp(58));
-        b.setPadding(dp(8), 0, dp(8), 0);
-        row.addView(b, new LinearLayout.LayoutParams(-2, dp(44)));
+        b.setMinWidth(0);
+        b.setPadding(dp(2), 0, dp(2), 0);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(42), 1f);
+        lp.setMargins(dp(2), 0, dp(2), 0);
+        row.addView(b, lp);
         b.setOnClickListener(action);
+    }
+
+    private void cutLayer() {
+        if (editor.cutSelection()) {
+            updateHint("Cutout created as a layer. Drag it to move, or export the PSD.");
+        } else if (!editor.hasImage()) {
+            updateHint("Open an image first.");
+        } else if (editor.getLassoPointCount() < 3) {
+            updateHint("Trace the object with at least 3 points, then tap Finish Lasso.");
+        } else if (!editor.isLassoFinished()) {
+            updateHint("Tap Finish Lasso to close the outline before cutting.");
+        } else {
+            updateHint("Could not cut that outline. Try tracing inside the image.");
+        }
     }
 
     private void openImage() {
@@ -110,7 +144,7 @@ public class MainActivity extends Activity {
                 Bitmap image = BitmapFactory.decodeStream(in, null, opts);
                 if (image == null) throw new IllegalArgumentException("Unsupported image");
                 editor.setImage(image);
-                updateHint("Image loaded at original resolution. Zoom in, choose Lasso, then tap points or trace.");
+                updateHint("Image opened at full resolution. Lasso → Finish Lasso → Cut Layer.");
             } catch (Exception e) { toast("Could not open image: " + e.getMessage()); }
         } else if (requestCode == CREATE_PNG) {
             try (OutputStream out = getContentResolver().openOutputStream(uri)) {

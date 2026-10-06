@@ -58,6 +58,9 @@ public class EditorView extends View {
         invalidate();
     }
     public boolean hasImage() { return image != null; }
+    public boolean hasCutouts() { return !layers.isEmpty(); }
+    public int getLassoPointCount() { return points.size(); }
+    public boolean isLassoFinished() { return lassoFinished; }
     public void setMode(Mode m) { mode=m; invalidate(); }
     public void zoomBy(float factor) { zoom=clamp(zoom*factor,0.35f,8f); invalidate(); }
     public void undoPoint() {
