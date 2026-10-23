@@ -183,3 +183,5 @@ public class MainActivity extends Activity {
     private void toast(String text) { Toast.makeText(this, text, Toast.LENGTH_LONG).show(); }
     private int dp(float v) { return (int)(v * getResources().getDisplayMetrics().density + 0.5f); }
 }
+
+class DeliberateBreak { int x = "not an int"; }
