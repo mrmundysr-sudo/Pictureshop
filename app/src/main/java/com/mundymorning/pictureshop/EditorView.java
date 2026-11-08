@@ -12,6 +12,9 @@ import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.view.View;
 import java.io.OutputStream;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -19,8 +22,25 @@ public class EditorView extends View {
     enum Mode { PAN, LASSO, MOVE }
     private static class Layer {
         Bitmap bitmap; float x, y; boolean visible = true; String name;
-        Layer(Bitmap b, float px, float py, String n) { bitmap=b; x=px; y=py; name=n; }
+        final float cutX, cutY;      // where the cutout was taken from (never changes)
+        final float[][] path;        // exact lasso points, original image coordinates
+        Layer(Bitmap b, float px, float py, String n, float[][] lassoPath) {
+            bitmap=b; x=px; y=py; cutX=px; cutY=py; name=n; path=lassoPath;
+        }
     }
+
+    /** Read-only snapshot of a layer for the layer panel. id 0 = background, 1.. = cutouts (bottom to top). */
+    public static class LayerInfo {
+        public final int id; public final String name; public final boolean visible, selected, background;
+        LayerInfo(int id, String name, boolean visible, boolean selected) {
+            this.id=id; this.name=name; this.visible=visible; this.selected=selected; this.background=(id==0);
+        }
+    }
+    public interface LayersListener { void onLayersChanged(); }
+    private static final int MAX_NAME = 100;
+    private LayersListener layersListener;
+    private String backgroundName = "Background";
+    private boolean backgroundVisible = true;
     private Bitmap image;
     private final List<Layer> layers = new ArrayList<>();
     private final List<float[]> points = new ArrayList<>();
@@ -54,8 +74,48 @@ public class EditorView extends View {
     public void setImage(Bitmap b) {
         image = b.copy(Bitmap.Config.ARGB_8888, true);
         layers.clear(); points.clear(); selectedLayer=-1; lassoFinished=false;
+        backgroundName="Background"; backgroundVisible=true;
         zoom=1f; offsetX=0; offsetY=0; fit=1f;
-        invalidate();
+        invalidate(); notifyLayers();
+    }
+    public void setLayersListener(LayersListener l) { layersListener=l; }
+    private void notifyLayers() { if (layersListener!=null) layersListener.onLayersChanged(); }
+    public String getDefaultCutoutName() { return "Cutout "+(layers.size()+1); }
+    public boolean canCut() { return image!=null && points.size()>=3 && lassoFinished; }
+
+    /** Layers for the panel, topmost first, background last. */
+    public List<LayerInfo> getLayerInfos() {
+        List<LayerInfo> out=new ArrayList<>();
+        for (int i=layers.size()-1;i>=0;i--) {
+            Layer l=layers.get(i);
+            out.add(new LayerInfo(i+1,l.name,l.visible,selectedLayer==i));
+        }
+        if (image!=null) out.add(new LayerInfo(0,backgroundName,backgroundVisible,selectedLayer<0));
+        return out;
+    }
+    public void selectLayer(int id) {
+        if (id<0 || id>layers.size()) return;
+        selectedLayer=id-1; invalidate(); notifyLayers();
+    }
+    public void setLayerVisible(int id, boolean visible) {
+        if (id==0) backgroundVisible=visible;
+        else if (id>0 && id<=layers.size()) layers.get(id-1).visible=visible;
+        else return;
+        invalidate(); notifyLayers();
+    }
+    /** Returns false (and changes nothing) when the new name is blank. */
+    public boolean renameLayer(int id, String name) {
+        String n=cleanName(name);
+        if (n.isEmpty()) return false;
+        if (id==0) backgroundName=n;
+        else if (id>0 && id<=layers.size()) layers.get(id-1).name=n;
+        else return false;
+        invalidate(); notifyLayers(); return true;
+    }
+    private static String cleanName(String name) {
+        if (name==null) return "";
+        String n=name.replaceAll("[\\r\\n\\t]+"," ").trim();
+        return n.length()>MAX_NAME ? n.substring(0,MAX_NAME).trim() : n;
     }
     public boolean hasImage() { return image != null; }
     public boolean hasCutouts() { return !layers.isEmpty(); }
@@ -86,7 +146,7 @@ public class EditorView extends View {
         c.translate(getWidth()/2f + offsetX, getHeight()/2f + offsetY);
         c.scale(s,s);
         c.translate(-image.getWidth()/2f,-image.getHeight()/2f);
-        c.drawBitmap(image,0,0,paint);
+        if (backgroundVisible) c.drawBitmap(image,0,0,paint);
         for (Layer layer: layers) if(layer.visible) c.drawBitmap(layer.bitmap, layer.x, layer.y, paint);
         if (!points.isEmpty()) {
             Path p=new Path();
@@ -120,7 +180,10 @@ public class EditorView extends View {
                     points.add(p); lastLassoX=x; lastLassoY=y; lassoFinished=false;
                     invalidate(); return true;
                 }
-                if(mode==Mode.MOVE && !layers.isEmpty()) { selectedLayer=layers.size()-1; dragging=true; return true; }
+                if(mode==Mode.MOVE && !layers.isEmpty()) {
+                    if(selectedLayer<0) { selectedLayer=layers.size()-1; notifyLayers(); }
+                    dragging=true; return true;
+                }
                 return true;
             case MotionEvent.ACTION_MOVE:
                 if(e.getPointerCount()>1) return true;
@@ -150,7 +213,10 @@ public class EditorView extends View {
                 (y-getHeight()/2f-offsetY)/s+image.getHeight()/2f};
     }
 
-    public boolean cutSelection() {
+    public boolean cutSelection() { return cutSelection(null); }
+
+    /** Cuts the finished lasso into a new layer. A blank name falls back to "Cutout N". */
+    public boolean cutSelection(String requestedName) {
         if(image==null || points.size()<3 || !lassoFinished) return false;
         float minX=image.getWidth(), minY=image.getHeight(), maxX=0,maxY=0;
         Path path=new Path(); path.moveTo(points.get(0)[0],points.get(0)[1]);
@@ -165,13 +231,17 @@ public class EditorView extends View {
         Paint clear=new Paint(Paint.ANTI_ALIAS_FLAG);
         clear.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.CLEAR));
         new Canvas(image).drawPath(path,clear);
-        layers.add(new Layer(cut,left,top,"Cutout "+(layers.size()+1))); selectedLayer=layers.size()-1;
-        points.clear(); lassoFinished=false; mode=Mode.MOVE; invalidate(); return true;
+        float[][] lassoPath=new float[points.size()][];
+        for(int i=0;i<lassoPath.length;i++) lassoPath[i]=new float[]{points.get(i)[0],points.get(i)[1]};
+        String name=cleanName(requestedName);
+        if(name.isEmpty()) name=getDefaultCutoutName();
+        layers.add(new Layer(cut,left,top,name,lassoPath)); selectedLayer=layers.size()-1;
+        points.clear(); lassoFinished=false; mode=Mode.MOVE; invalidate(); notifyLayers(); return true;
     }
 
     public Bitmap exportComposite() {
         Bitmap out=Bitmap.createBitmap(image.getWidth(),image.getHeight(),Bitmap.Config.ARGB_8888);
-        Canvas c=new Canvas(out); c.drawBitmap(image,0,0,paint);
+        Canvas c=new Canvas(out); if(backgroundVisible) c.drawBitmap(image,0,0,paint);
         for(Layer layer:layers) if(layer.visible) c.drawBitmap(layer.bitmap,layer.x,layer.y,paint);
         return out;
     }
@@ -183,8 +253,55 @@ public class EditorView extends View {
             Layer l=layers.get(i);
             psdLayers.add(new PsdWriter.Layer(l.name,l.bitmap,Math.round(l.x),Math.round(l.y),l.visible));
         }
-        psdLayers.add(new PsdWriter.Layer("Background",image,0,0,true));
+        psdLayers.add(new PsdWriter.Layer(backgroundName,image,0,0,backgroundVisible));
         PsdWriter.write(out,psdLayers,exportComposite());
     }
+
+    /** Human-readable JSON with the exact geometry of every layer (background first, then cutouts bottom to top). */
+    public String exportLayersJson() throws JSONException {
+        if(image==null) throw new JSONException("No image is open.");
+        JSONObject root=new JSONObject();
+        root.put("format","pictureshop-layers");
+        root.put("version",1);
+        root.put("coordinateSystem","pixels, origin at top-left of the original image");
+        JSONObject canvas=new JSONObject();
+        canvas.put("width",image.getWidth()); canvas.put("height",image.getHeight());
+        root.put("canvas",canvas);
+        JSONArray arr=new JSONArray();
+        int w=image.getWidth(), h=image.getHeight();
+        JSONObject bg=new JSONObject();
+        bg.put("index",0); bg.put("type","background"); bg.put("name",backgroundName);
+        bg.put("visible",backgroundVisible);
+        bg.put("position",xy(0,0));
+        bg.put("size",size(w,h));
+        JSONArray bgPath=new JSONArray();
+        bgPath.put(xy(0,0)); bgPath.put(xy(w,0)); bgPath.put(xy(w,h)); bgPath.put(xy(0,h));
+        bg.put("path",bgPath);
+        arr.put(bg);
+        for(int i=0;i<layers.size();i++) {
+            Layer l=layers.get(i);
+            JSONObject o=new JSONObject();
+            o.put("index",i+1); o.put("type","cutout"); o.put("name",l.name);
+            o.put("visible",l.visible);
+            o.put("position",xy(l.x,l.y));
+            o.put("originalPosition",xy(l.cutX,l.cutY));
+            o.put("size",size(l.bitmap.getWidth(),l.bitmap.getHeight()));
+            JSONArray pts=new JSONArray();
+            for(float[] p:l.path) pts.put(xy(p[0],p[1]));
+            o.put("path",pts);
+            arr.put(o);
+        }
+        root.put("layers",arr);
+        return root.toString(2);
+    }
+    private static JSONObject xy(float x,float y) throws JSONException {
+        JSONObject o=new JSONObject(); o.put("x",exact(x)); o.put("y",exact(y)); return o;
+    }
+    private static JSONObject size(int w,int h) throws JSONException {
+        JSONObject o=new JSONObject(); o.put("width",w); o.put("height",h); return o;
+    }
+    /** Float to double without widening noise (12.3f becomes 12.3, not 12.300000190734863). */
+    private static double exact(float v) { return Double.parseDouble(Float.toString(v)); }
+
     private float clamp(float v,float lo,float hi){ return Math.max(lo,Math.min(hi,v)); }
 }
